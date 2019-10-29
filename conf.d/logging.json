@@ -7,6 +7,18 @@
             "requests": {
                 "level": "ERROR",
                 "handlers": ["console"]
+            },
+            "urllib3": {
+                "level": "ERROR",
+                "handlers": ["console"]
+            },
+            "docker": {
+                "level": "ERROR",
+                "handlers": ["console"]
+            },
+            "epicbox": {
+                "level": "ERROR",
+                "handlers": ["console"]
             }
     },
     "version": 1,

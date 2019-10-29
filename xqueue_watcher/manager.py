@@ -15,12 +15,7 @@ import time
 
 import codejail
 
-from settings import get_manager_config_values, MANAGER_CONFIG_DEFAULTS
-
-CODEJAIL_LANGUAGES = {
-    'python2': codejail.languages.python2,
-    'python3': codejail.languages.python3,
-}
+from .settings import get_manager_config_values, MANAGER_CONFIG_DEFAULTS
 
 
 class Manager(object):
@@ -117,6 +112,12 @@ class Manager(object):
         limits are optional
         user defaults to the current user
         """
+
+        CODEJAIL_LANGUAGES = {
+            'python2': codejail.languages.python2,
+            'python3': codejail.languages.python3,
+        }
+
         name = codejail_config["name"]
         bin_path = codejail_config['bin_path']
         user = codejail_config.get('user', getpass.getuser())

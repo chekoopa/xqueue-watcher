@@ -20,5 +20,9 @@ log/
 reports/
 /src/
 \#*\#
+/venv/
 *.egg-info
 .idea/
+conf.d/conf.d/*.json
+graders/
+!/graders/test.py
