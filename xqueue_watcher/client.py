@@ -96,6 +96,13 @@ class XQueueClient(object):
                     r = None
                 else:
                     return (False, "Could not log in")
+            # Sometimes Stepik issues rare 500 on get_submission request,
+            # when the platform is under heavy load, so this issue doesn't
+            # need a long message, yet should be pointed out.
+            elif r.status_code == 500 and uri == "/xqueue/get_submission/":
+                message = "Got code 500 at update request"
+                log.warning(message)
+                return (False, message)
             else:
                 message = "Received un expected response status code, {0}, calling {1}.".format(
                     r.status_code,url)
