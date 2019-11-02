@@ -5,13 +5,18 @@ import os
 import sys
 import six
 import time
+import traceback
 import json
+import pprint
 from path import path
 import logging
 import multiprocessing
 # from statsd import statsd
 import contextlib
 import importlib.util
+import smtplib, ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 import epicbox
 
@@ -27,6 +32,21 @@ def unwrap(x):
     return x[0] if isinstance(x, tuple) else x
 
 
+def check_mail(params, logger):
+    # TODO: consider STARTTLS and other protocols
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(params["server"], params["port"], context=context) as server:
+            server.login(params["email"], params["password"])
+            server.quit()
+        assert (isinstance(params["recipients"], list))
+        logger.debug("alert mail server configured")
+        return True
+    except Exception as e:
+        logger.exception("check_mail")
+        return False
+
+
 class StepikGrader(object):
 
     TECH_DIFF_MSG = "Упс.\nВозникла проблема на нашей стороне, над которой, скорей всего, мы уже " \
@@ -34,19 +54,55 @@ class StepikGrader(object):
                     "воздержитесь от дальнейшей отправки решений до объявления."
 
     def __init__(self, grader_root='/tmp/', fork_per_item=True, logger_name=__name__,
-                 fail_on_error=False):
+                 fail_on_error=False, alert_mail=None):
         """
         grader_root = root path to graders
         fork_per_item = fork a process for every request
         logger_name = name of logger
+        alert_mail = SMTP credentials and recipients list
         """
         self.log = logging.getLogger(logger_name)
         self.grader_root = path(grader_root)
 
         self.fork_per_item = fork_per_item
         self.fail_on_error = fail_on_error
+        self.alert_mail = alert_mail if check_mail(alert_mail, self.log) else None
 
         epicbox.configure(profiles=[epicbox.Profile('python', 'python:3.7-alpine')])
+
+    def send_alert(self, type, path, body, error_txt):
+        try:
+            own_address = self.alert_mail["email"]
+
+            subject = f"{type} in {path if path is not None else 'processing system'}"
+            if body is not None:
+                payload = pprint.pformat(body.get("grader_payload", None), indent=2)
+                response = body.get("student_response", "<none?!>")
+            else:
+                payload, response = None, None
+
+            message = MIMEMultipart("alternative")
+            message["Subject"] = subject
+            message["From"] = own_address
+
+            text = f"Subject: {subject}\n\n" \
+                f"{error_txt}\n\n" \
+                f"Payload:\n{payload}\n\n" \
+                f"Submission:\n<<< START OF TEXT >>>\n" \
+                f"{response}\n" \
+                f"<<<END OF TEXT>>>\n"
+
+            message.attach(MIMEText(text, "plain"))
+
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(self.alert_mail["server"], self.alert_mail["port"], context=context) as server:
+                server.login(own_address, self.alert_mail["password"])
+                for address in self.alert_mail["recipients"]:
+                    message["To"] = address
+                    server.sendmail(own_address, address, message.as_string())
+                server.quit()
+        except Exception as e:
+            self.log.exception("send_alert")
 
     def __call__(self, content):
         if self.fork_per_item:
@@ -63,6 +119,7 @@ class StepikGrader(object):
             return self.process_item(content)
 
     def process_item(self, content, queue=None):
+        grader_path, body = None, None
         try:
             # statsd.increment('xqueuewatcher.process-item')
             body = content['xqueue_body']
@@ -98,8 +155,10 @@ class StepikGrader(object):
             # statsd.increment('xqueuewatcher.replies (non-exception)')
 
         except Exception as e:
-            # TODO: REPORT THE PROBLEM
             self.log.exception("process_item")
+            if self.alert_mail:
+                self.send_alert(type(e).__name__, grader_path, body,
+                                traceback.format_exc())
             if self.fail_on_error:
                 reply = {'score': 0, 'msg': self.TECH_DIFF_MSG}
                 if queue:
