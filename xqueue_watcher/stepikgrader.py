@@ -23,6 +23,10 @@ def load_module(name, module_file):
     return foo
 
 
+def unwrap(x):
+    return x[0] if isinstance(x, tuple) else x
+
+
 class StepikGrader(object):
 
     TECH_DIFF_MSG = "Упс.\nВозникла проблема на нашей стороне, над которой, скорей всего, мы уже " \
@@ -127,8 +131,15 @@ class StepikGrader(object):
             }
 
             test_data = grader.generate()
-            if not isinstance(test_data, list):
-                raise AssertionError(f"{grader_path}: generate() must return a list!")
+            if isinstance(test_data, (str, tuple)):
+                test_data = [test_data]
+                suite_size = grader_config.get("SUITE_SIZE", 20)
+                for i in range(suite_size-1):
+                    test_data.append(grader.generate())
+            elif isinstance(test_data, list):
+                pass  # all right!
+            else:
+                raise AssertionError(f"{grader_path}: generate() must return a list or at least a single test!")
 
             files = [{'name': 'main.py', 'content': student_response.encode()}]
             rates = []
@@ -141,11 +152,13 @@ class StepikGrader(object):
                             raise AssertionError(f"{grader_path}: bad clued test!")
                         stdin_text, clue = test
                         must_solve = False
-                    else:
+                    elif isinstance(test, str):
                         stdin_text = test
                         # TODO: fork it to save time?
                         clue = None
                         must_solve = True
+                    else:
+                        raise AssertionError(f"{grader_path}: test type isn't str!")
 
                     result = epicbox.start(sandbox, stdin=stdin_text)
 
@@ -165,9 +178,22 @@ class StepikGrader(object):
                     if must_solve:
                         clue = grader.solve(test)
 
-                    rates.append(grader.check(stdout_text, clue))
+                    rate = grader.check(stdout_text, clue)
 
-            final_rate = grader.evaluate(rates)
+                    if isinstance(rate, tuple):
+                        if not len(test) == 2:
+                            raise AssertionError(f"{grader_path}: bad commented check rate!")
+                        if rate[0] is None:
+                            return {'score': 0, 'msg': rate[1]}
+                    elif rate is None:
+                        return {'score': 0, 'msg': ''}
+
+                    rates.append(rate)
+
+            if hasattr(grader, "evaluate"):
+                final_rate = grader.evaluate(rates)
+            else:
+                final_rate = sum(map(unwrap, rates))/len(rates)
 
             if isinstance(final_rate, tuple):
                 return {'score': final_rate[0], 'msg': final_rate[1]}
