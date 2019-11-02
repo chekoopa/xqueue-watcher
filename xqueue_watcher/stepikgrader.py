@@ -162,12 +162,13 @@ class StepikGrader(object):
 
                     result = epicbox.start(sandbox, stdin=stdin_text)
 
+                    # TODO: опция для игнорирования некорректных результатов
                     if result['timeout']:
-                        return {'score': 0, 'msg': 'Timeout'}
+                        return {'score': 0, 'msg': 'Превышено время выполнения решения'}
                     if result['oom_killed']:
-                        return {'score': 0, 'msg': 'Resource error'}
+                        return {'score': 0, 'msg': 'Решение не уложилось в отведённые ресурсы'}
                     if result['exit_code'] != 0:
-                        return {'score': 0, 'msg': 'Runtime error'}
+                        return {'score': 0, 'msg': 'Произошла ошибка при выполнении'}
 
                     stdout_raw = result['stdout']
                     if hasattr(grader, "post_process"):
