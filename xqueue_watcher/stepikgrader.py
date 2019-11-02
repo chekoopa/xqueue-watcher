@@ -33,7 +33,8 @@ class StepikGrader(object):
                     "работаем.\nСообщите номер вашего решения по адресу, указанному в курсе, и " \
                     "воздержитесь от дальнейшей отправки решений до объявления."
 
-    def __init__(self, grader_root='/tmp/', fork_per_item=True, logger_name=__name__):
+    def __init__(self, grader_root='/tmp/', fork_per_item=True, logger_name=__name__,
+                 fail_on_error=False):
         """
         grader_root = root path to graders
         fork_per_item = fork a process for every request
@@ -43,6 +44,7 @@ class StepikGrader(object):
         self.grader_root = path(grader_root)
 
         self.fork_per_item = fork_per_item
+        self.fail_on_error = fail_on_error
 
         epicbox.configure(profiles=[epicbox.Profile('python', 'python:3.7-alpine')])
 
@@ -98,7 +100,12 @@ class StepikGrader(object):
         except Exception as e:
             # TODO: REPORT THE PROBLEM
             self.log.exception("process_item")
-            if queue:
+            if self.fail_on_error:
+                reply = {'score': 0, 'msg': self.TECH_DIFF_MSG}
+                if queue:
+                    queue.put(reply)
+                return reply
+            elif queue:
                 queue.put(e)
             else:
                 raise
@@ -202,4 +209,4 @@ class StepikGrader(object):
                 return {'score': final_rate, 'msg': self.default_msg(final_rate)}
         except Exception as e:
             self.log.exception("grade")
-            return {'score': 0, 'msg': self.TECH_DIFF_MSG}
+            raise
