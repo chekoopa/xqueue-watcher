@@ -19,7 +19,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import epicbox
-
+from epicbox.config import DEFAULT_LIMITS
 
 def load_module(name, module_file):
     spec = importlib.util.spec_from_file_location(name, os.path.abspath(os.path.expanduser(module_file)))
@@ -184,17 +184,11 @@ class StepikGrader(object):
     def grade(self, grader_path, grader_config, student_response):
         try:
             grader = load_module("grader", grader_path)
-            limits = {  # default at the moment
-                # CPU time in seconds, None for unlimited
-                'cputime': 1,
-                # Real time in seconds, None for unlimited
-                'realtime': 5,
-                # Memory in megabytes, None for unlimited
-                'memory': 64,
-                # limit the max processes the sandbox can have
-                # -1 or None for unlimited(default)
-                'processes': -1,
-            }
+
+            limits = DEFAULT_LIMITS
+            own_limits = grader_config.get("limits", None)
+            if own_limits is not None:
+                limits.update(own_limits)
 
             test_data = grader.generate()
             if isinstance(test_data, (str, tuple)):
