@@ -17,9 +17,13 @@ import importlib.util
 import smtplib, ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import inspect
 
 import epicbox
 from epicbox.config import DEFAULT_LIMITS
+
+static_path = os.path.dirname(os.path.abspath(inspect.stack()[0][1]))
+
 
 def load_module(name, module_file):
     spec = importlib.util.spec_from_file_location(name, os.path.abspath(os.path.expanduser(module_file)))
@@ -30,6 +34,15 @@ def load_module(name, module_file):
 
 def unwrap(x):
     return x[0] if isinstance(x, tuple) else x
+
+
+def read_file(name):
+    with open(name) as fin:
+        return fin.read()
+
+
+def get_server_file(name):
+    return read_file(os.path.join(static_path, "server-i7s", name)).encode()
 
 
 def check_mail(params, logger):
@@ -48,10 +61,19 @@ def check_mail(params, logger):
 
 
 class StepikGrader(object):
-
     TECH_DIFF_MSG = "Упс.\nВозникла проблема на нашей стороне, над которой, скорей всего, мы уже " \
                     "работаем.\nСообщите номер вашего решения по адресу, указанному в курсе, и " \
                     "воздержитесь от дальнейшей отправки решений до объявления."
+
+    # resource limits for server mode should be less strict, because
+    # we're actually running two python scripts, and server can also
+    # eat up a reasonable chunk of CPU.
+    SERVER_LIMITS = {
+        'cputime': None,
+        'realtime': 60,
+        'memory': 128,
+        'processes': -1,
+    }
 
     def __init__(self, grader_root='/tmp/', fork_per_item=True, logger_name=__name__,
                  fail_on_error=False, alert_mail=None):
@@ -68,7 +90,15 @@ class StepikGrader(object):
         self.fail_on_error = fail_on_error
         self.alert_mail = alert_mail if check_mail(alert_mail, self.log) else None
 
-        epicbox.configure(profiles=[epicbox.Profile('python', 'python:3.7-alpine')])
+        epicbox.configure(profiles=[
+            epicbox.Profile('python', 'python:3.7-alpine'),
+            epicbox.Profile('python-server', 'python-server:1.0'),
+        ])
+
+        self.server_files = [
+            {"name": "main.py", "content": get_server_file("main.py")},
+            {"name": "helper.py", "content": get_server_file("helper.py")},
+        ]
 
     def send_alert(self, type, path, body, error_txt):
         try:
@@ -142,7 +172,13 @@ class StepikGrader(object):
             grader_path = (self.grader_root / relative_grader_path).abspath()
 
             # start = time.time()
-            results = self.grade(grader_path, grader_config, student_response)
+            task_type = grader_config.get("type", "code")
+            if task_type == "code":
+                results = self.grade(grader_path, grader_config, student_response)
+            elif task_type == "server":
+                results = self.grade_server(grader_path, grader_config, student_response)
+            else:
+                raise ValueError("unknown task type: " + task_type)
 
             # statsd.histogram('xqueuewatcher.grading-time', time.time() - start)
 
@@ -185,7 +221,7 @@ class StepikGrader(object):
         try:
             grader = load_module("grader", grader_path)
 
-            limits = DEFAULT_LIMITS
+            limits = DEFAULT_LIMITS.copy()
             own_limits = grader_config.get("limits", None)
             if own_limits is not None:
                 limits.update(own_limits)
@@ -194,7 +230,7 @@ class StepikGrader(object):
             if isinstance(test_data, (str, tuple)):
                 test_data = [test_data]
                 suite_size = grader_config.get("SUITE_SIZE", 20)
-                for i in range(suite_size-1):
+                for i in range(suite_size - 1):
                     test_data.append(grader.generate())
             elif isinstance(test_data, list):
                 pass  # all right!
@@ -254,7 +290,7 @@ class StepikGrader(object):
             if hasattr(grader, "evaluate"):
                 final_rate = grader.evaluate(rates)
             else:
-                final_rate = sum(map(unwrap, rates))/len(rates)
+                final_rate = sum(map(unwrap, rates)) / len(rates)
 
             if isinstance(final_rate, tuple):
                 return {'score': final_rate[0], 'msg': final_rate[1]}
@@ -262,4 +298,45 @@ class StepikGrader(object):
                 return {'score': final_rate, 'msg': self.default_msg(final_rate)}
         except Exception as e:
             self.log.exception("grade")
+            raise
+
+    def grade_server(self, grader_path, grader_config, student_response):
+        result = None
+        try:
+            limits = self.SERVER_LIMITS.copy()
+            own_limits = grader_config.get("limits", None)
+            if own_limits is not None:
+                limits.update(own_limits)
+
+            grader_content = read_file(grader_path)
+            files = [{'name': 'grader.py', 'content': grader_content.encode()},
+                     {'name': 'client.py', 'content': student_response.encode()},
+                     ] + self.server_files
+
+            with epicbox.create('python-server', 'python3 main.py',
+                                files=files, limits=limits) as sandbox:
+
+                result = epicbox.start(sandbox)
+
+                if result['timeout']:
+                    raise TimeoutError("Server container has reached a timeout")
+                if result['exit_code'] != 0:
+                    raise RuntimeError("Server has been broken by a submission")
+                if result['oom_killed']:
+                    # TODO: решить, насколько это корректно
+                    return {'score': 0, 'msg': 'Решение не уложилось в отведённые ресурсы'}
+
+                output = json.loads(result['stdout'])
+
+                if grader_config.get("testing", False):
+                    self.log.info(result)
+
+                return {'score': output['score'], 'msg': output['msg']}
+
+        except Exception as e:
+            if result is not None:
+                grader_config['TRACE_STDOUT'] = result["stdout"]
+                grader_config['TRACE_STDERR'] = result["stderr"]
+                self.log.error(result)
+            self.log.exception("grade_server")
             raise
