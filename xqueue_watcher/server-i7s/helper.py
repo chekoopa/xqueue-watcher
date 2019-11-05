@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import time
@@ -27,8 +28,9 @@ def mean(L):
 
 def make_fork(cmd, in_text=None):
     in_text = in_text.encode() if in_text is not None else b""
-    r = subprocess.Popen(f"{cmd}", shell=True, stdin=subprocess.PIPE,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    r = subprocess.Popen(f"{cmd}", shell=True, env=os.environ,
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE)
     r.stdin.write(in_text)
     return r
 
